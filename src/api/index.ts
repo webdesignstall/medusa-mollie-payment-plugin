@@ -40,7 +40,6 @@ export default (rootDirectory, options) => {
 
     try {
         const {status} = await mollie.payments.get(paymentId);
-        
 
         res.json({status})
         

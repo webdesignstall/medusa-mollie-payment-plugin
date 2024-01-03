@@ -4,7 +4,6 @@ import { EOL } from "node:os";
 import { MedusaError } from "@medusajs/utils"
 
 
-
 export interface PaymentIntentOptions {
     capture_method?: "automatic" | "manual"
     setup_future_usage?: "on_session" | "off_session"
@@ -28,7 +27,7 @@ abstract class MollieBase extends AbstractPaymentProcessor {
 
   protected init(): void {
     this.mollie_ =
-      this.mollie_ || createMollieClient({ apiKey: 'test_6V8uCewaxHPaSK4PSfKNxdJPBh5TMr' });
+      this.mollie_ || createMollieClient({ apiKey: process.env.MOLLIE_CLIENT_KEY });
   }
 
 
@@ -58,53 +57,14 @@ abstract class MollieBase extends AbstractPaymentProcessor {
   }
 
 
-  // async initiatePayment(
-  //   context: PaymentProcessorContext
-  // ): Promise<PaymentProcessorError | PaymentProcessorSessionResponse | void> {
-  //   const intentRequestData = this.getPaymentIntentOptions()
-
-  //   const {
-  //     email,
-  //     context: cart_context,
-  //     currency_code,
-  //     amount,
-  //     resource_id,
-  //     customer,
-  //   } = context
-
-  //   // const description = (cart_context.payment_description ??
-  //   //   this.options_?.payment_description) as strin
-
-  //   console.log(context);
-
-  //   const payment = await this.mollie_.payments.create({
-  //       amount: {
-  //         value:    '10.00',
-  //         currency: 'EUR'
-  //       },
-  //       description: 'My first API payment',
-  //       redirectUrl: 'https://yourwebshop.example.org/order/123456',
-  //       webhookUrl:  'https://yourwebshop.example.org/webhook'
-  //     });
-      
-  //     // Forward the customer to payment.getCheckoutUrl().
-
-  //   return {
-  //       session_data: payment,
-  //     }
-   
-  // }
-
   async getPaymentStatus(
     paymentSessionData: Record<string, unknown>
   ): Promise<PaymentSessionStatus> {
     const paymentId = paymentSessionData.id as string
 
-    // assuming client is an initialized client
-    // communicating with a third-party service.
     const paymentIntent = await this.mollie_.payments.get(paymentId) as unknown as PaymentSessionStatus
 
-    console.log('paymentIntent', paymentIntent);
+    console.log('getPaymentStatus', paymentIntent);
     
     return PaymentSessionStatus.AUTHORIZED
 
@@ -141,27 +101,26 @@ abstract class MollieBase extends AbstractPaymentProcessor {
         customer,
       } = context;
 
-      const cartId = context.resource_id.split('_');
-  
-      console.log('initiate',context);
+      const formattedAmount = (amount / 100).toFixed(2);
   
       const payment = await this.mollie_.payments.create({
         amount: {
-          value: '10.00',
-          currency: 'EUR',
+          value: String(formattedAmount),
+          currency: currency_code.toUpperCase(),
         },      
-        description: 'My first API payment',
-        redirectUrl: `http://localhost:8000`,
+        description: '...',
+        redirectUrl: `${process.env.MOLLIE_REDIRECT_URL}`,
         webhookUrl: 'https://yourwebshop.example.org/webhook',
+        billingEmail: email,
+        metadata: {customerId: customer.id, has_account: customer.has_account}        
       });
 
-      await this.mollie_.payments.update(payment.id, {redirectUrl: `http://localhost:8000/checkout?paymentId=${payment?.id}`})
+      await this.mollie_.payments.update(payment.id, {redirectUrl: `${process.env.MOLLIE_REDIRECT_URL}/checkout?paymentId=${payment?.id}`})
   
-      let myVar: Record<string, unknown> = payment as any;
-        // this.getPaymentStatus(myVar);
-      // Forward the customer to payment.getCheckoutUrl().
+      const initiatePayment: Record<string, unknown> = payment as any;
+    
       return {
-        session_data: myVar,
+        session_data: initiatePayment,
       };
     } catch (error) {
       // Handle errors and return as PaymentProcessorError
@@ -180,18 +139,15 @@ abstract class MollieBase extends AbstractPaymentProcessor {
     PaymentProcessorError |
     {
       status: PaymentSessionStatus;
-      data: Record<string, unknown>;
+      data: PaymentProcessorSessionResponse["session_data"];
     }
   > {
     try {
-      // await this.mollie_.payments(paymentSessionData.id)
-      console.log(PaymentSessionStatus.AUTHORIZED);
       
-      console.log('authrized',paymentSessionData);
+      const status = await this.getPaymentStatus(paymentSessionData);
       
-
       return {
-        status: PaymentSessionStatus.AUTHORIZED,
+        status: status,
         data: paymentSessionData
       }
     } catch (e) {
@@ -203,25 +159,25 @@ abstract class MollieBase extends AbstractPaymentProcessor {
 
  
 
-  // async capturePayment(
-  //   paymentSessionData: Record<string, unknown>
-  // ): Promise<
-  //   PaymentProcessorError | PaymentProcessorSessionResponse["session_data"]
-  // > {
-  //   const id = paymentSessionData.id as string
-  //   try {
-  //     const intent = await this.mollie_.payments_captures.get(id, GetParameters)
-  //     return intent as unknown as PaymentProcessorSessionResponse["session_data"]
-  //   } catch (error) {
-  //     if (error.code === ErrorCodes.PAYMENT_INTENT_UNEXPECTED_STATE) {
-  //       if (error.payment_intent?.status === ErrorIntentStatus.SUCCEEDED) {
-  //         return error.payment_intent
-  //       }
-  //     }
+  async capturePayment(
+    paymentSessionData: Record<string, unknown>
+  ): Promise<
+    PaymentProcessorError | PaymentProcessorSessionResponse["session_data"]
+  > {
+    const id = paymentSessionData.id as string
+    try {
+      const intent = await this.mollie_.payments.get(id)
+      return intent as unknown as PaymentProcessorSessionResponse["session_data"]
+    } catch (error) {
+      // if (error.code === ErrorCodes.PAYMENT_INTENT_UNEXPECTED_STATE) {
+      //   if (error.payment_intent?.status === ErrorIntentStatus.SUCCEEDED) {
+      //     return error.payment_intent
+      //   }
+      // }
 
-  //     return this.buildError("An error occurred in capturePayment", error)
-  //   }
-  // }
+      return this.buildError("An error occurred in capturePayment", error)
+    }
+  }
   
 
   async cancelPayment(
@@ -231,7 +187,7 @@ abstract class MollieBase extends AbstractPaymentProcessor {
   > {
     try {
       const id = paymentSessionData.id as string
-      console.log(paymentSessionData);
+      console.log('cancelPayment', paymentSessionData);
     //   return (await this.mollie_.payments.cancel(
     //     id
     //   )) as unknown as PaymentProcessorSessionResponse["session_data"]
@@ -275,20 +231,18 @@ abstract class MollieBase extends AbstractPaymentProcessor {
   ): Promise<PaymentProcessorError | PaymentProcessorSessionResponse | void> {
     const { amount, customer, paymentSessionData } = context
 
-    console.log(customer);
-
     const stripeId = customer?.metadata?.stripe_id
 
     if (stripeId !== paymentSessionData.customer) {
-      // const result = await this.initiatePayment(context)
-      // if (isPaymentProcessorError(result)) {
-      //   return this.buildError(
-      //     "An error occurred in updatePayment during the initiate of the new payment for the new customer",
-      //     result
-      //   )
-      // }
+      const result = await this.initiatePayment(context)
+      if (isPaymentProcessorError(result)) {
+        return this.buildError(
+          "An error occurred in updatePayment during the initiate of the new payment for the new customer",
+          result
+        )
+      }
 
-      // return result
+      return result
       
     } else {
 
@@ -298,11 +252,9 @@ abstract class MollieBase extends AbstractPaymentProcessor {
 
       try {
         const id = paymentSessionData.id as string
-        const sessionData = (await this.mollie_.payments.update(id, {
-          
-        })) as unknown as PaymentProcessorSessionResponse["session_data"]
+        const sessionData = (await this.mollie_.payments.get(id)) as unknown as PaymentProcessorSessionResponse["session_data"]
 
-        return { session_data: sessionData }
+        return { session_data: paymentSessionData }
       } catch (e) {
         return this.buildError("An error occurred in updatePayment", e)
       }
